@@ -342,13 +342,32 @@
   }
 
   // ---------- setup and sign-in ----------
-  $("setupForm").addEventListener("submit", e => {
+  function cleanUrl(raw) {
+    let u = raw.trim().replace(/\s+/g, "");
+    const dash = u.match(/supabase\.com\/dashboard\/project\/([a-z0-9]+)/i); // dashboard link pasted by mistake
+    if (dash) return "https://" + dash[1].toLowerCase() + ".supabase.co";
+    if (/^[a-z0-9]{15,}$/i.test(u)) return "https://" + u.toLowerCase() + ".supabase.co"; // project ref only
+    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+    try { const p = new URL(u); return "https://" + p.host.toLowerCase(); } catch (e) { return ""; }
+  }
+  $("setupForm").addEventListener("submit", async e => {
     e.preventDefault();
-    const url = $("s-url").value.trim().replace(/\/+$/, ""), key = $("s-key").value.trim();
-    if (!/^https:\/\/[^\s/]+$/.test(url)) { flash("s-status", "Enter the project URL, like https://abcdefgh.supabase.co", true); return; }
+    const url = cleanUrl($("s-url").value), key = $("s-key").value.replace(/\s+/g, "");
+    if (!url) { flash("s-status", "Enter the project URL, like https://abcdefgh.supabase.co", true); return; }
     if (key.length < 20) { flash("s-status", "Paste the full public key.", true); return; }
     if (/service_role|sb_secret_/.test(key) || /"role"\s*:\s*"service_role"/.test(atobSafe(key.split(".")[1] || ""))) { flash("s-status", "That's the secret key. Use the public (anon or publishable) key instead.", true); return; }
+    $("s-url").value = url;
+    flash("s-status", "Checking the connection…");
+    let res;
+    try { res = await fetch(url + "/auth/v1/settings", { headers: { apikey: key } }); }
+    catch (err) {
+      flash("s-status", `Can't reach ${url}. Check that the URL matches Project Settings → API exactly, that the project isn't paused, and try with ad blockers or VPN turned off.`, true);
+      return;
+    }
+    if (res.status === 401 || res.status === 403) { flash("s-status", "The URL works, but the key was rejected. Copy the anon (or publishable) key again.", true); return; }
+    if (!res.ok) { flash("s-status", `The project answered with an error (${res.status}). If it was just created, wait a minute and try again.`, true); return; }
     store_.set(CFG_KEY, { mode: "cloud", url, key });
+    client = null;
     boot();
   });
   function atobSafe(s) { try { return atob(s.replace(/-/g, "+").replace(/_/g, "/")); } catch (e) { return ""; } }
@@ -365,7 +384,10 @@
       user = res.data.session.user;
       startCloud();
     } catch (err) {
-      flash("i-status", (err && err.message) || "Couldn't sign in.", true);
+      const m = (err && err.message) || "";
+      flash("i-status", /fetch|network|load failed/i.test(m)
+        ? "Can't reach your Supabase project. Choose \"Change database settings\" below and re-enter the URL and key; the app will test them."
+        : (m || "Couldn't sign in."), true);
     } finally { $("i-signin").disabled = false; $("i-signup").disabled = false; }
   }
   $("signinForm").addEventListener("submit", e => { e.preventDefault(); auth("in"); });
@@ -404,6 +426,15 @@
     } catch (err) { flash("x-status", `Copied ${n} entries, then stopped: ${errMsg(err)}`, true); }
   });
 
+  // Load the Supabase library; fall back to an older build if the main one didn't load.
+  function loadScript(src) {
+    return new Promise(res => { const t = document.createElement("script"); t.src = src; t.onload = res; t.onerror = res; document.head.appendChild(t); });
+  }
+  async function ensureLib() {
+    if (window.supabase && window.supabase.createClient) return;
+    await loadScript("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js");
+  }
+
   // ---------- boot ----------
   function startCloud() {
     store = CloudStore(client, user.id);
@@ -421,6 +452,7 @@
       refresh();
       return;
     }
+    await ensureLib();
     if (!window.supabase || !window.supabase.createClient) {
       if (cached) applyData(cached);
       setSync("Offline: the sync library couldn't load. Showing the last saved copy.", true);

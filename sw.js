@@ -1,6 +1,6 @@
 // Offline support: keeps the app's own files cached so it opens without a connection.
 // Data still comes from Supabase (or this device's storage); this file never caches it.
-const VERSION = "tracker-v1";
+const VERSION = "tracker-v3";
 const SHELL = ["./", "index.html", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", event => {
